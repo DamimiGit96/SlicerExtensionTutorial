@@ -124,6 +124,8 @@ class MyFirstModuleParameterNode:
     invertThreshold: bool = False
     thresholdedVolume: vtkMRMLScalarVolumeNode
     invertedVolume: vtkMRMLScalarVolumeNode
+    autoUpdate: bool = False
+
 
 
 #
