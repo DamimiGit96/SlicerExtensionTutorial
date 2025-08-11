@@ -176,10 +176,13 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # Buttons
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
         self.ui.autoUpdateCheckBox.connect("toggled(bool)", self.onEnableAutoUpdate)
+        self.ui.createSphereButton.connect("clicked()", self.onCreateSphereButton)
 
 
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
+
+        
 
 
     def cleanup(self) -> None:
@@ -273,6 +276,17 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def onMarkupsUpdated(self, caller=None, event=None):
         self.onApplyButton()
+        try: # para que la esfera se mueva con el arrastre de puntos
+            self.onCreateSphereButton()
+        except Exception:
+            pass  # por si aún no hay 2 puntos
+
+    def onCreateSphereButton(self):
+        with slicer.util.tryWithErrorDisplay(_("Failed to create sphere."), waitCursor=True):
+            markups = self.ui.inputSelector.currentNode()
+            center, radius = self.logic.positionSphereBetweenFirstTwoPoints(markups)
+            # Opcional: refrescar el label con el centro calculado
+            self.ui.centerOfMassValueLabel.text = ", ".join(f"{v:.2f}" for v in center)
 
 
 
@@ -311,6 +325,40 @@ class MyFirstModuleLogic(ScriptedLoadableModuleLogic):
         center = s / n
         logging.info(f'Center of mass for {markupsNode.GetName()}: {center}')
         return center
+
+    def _ensureSphereModel(self):
+        node = slicer.mrmlScene.GetFirstNodeByName("CenterSphere")
+        if not node:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "CenterSphere")
+            node.CreateDefaultDisplayNodes()
+            node.GetDisplayNode().SetSliceIntersectionVisibility(True)  # ver cortes 2D
+        return node
+
+    def positionSphereBetweenFirstTwoPoints(self, markupsNode, radius=None):
+        import numpy as np, vtk
+        n = markupsNode.GetNumberOfControlPoints()
+        if n < 2:
+            raise ValueError("Need at least two control points")
+
+        p0 = np.array(markupsNode.GetNthControlPointPosition(0), dtype=float)
+        p1 = np.array(markupsNode.GetNthControlPointPosition(1), dtype=float)
+        center = (p0 + p1) / 2.0
+
+        dist = float(np.linalg.norm(p1 - p0))
+        if radius is None:
+            radius = max(1.0, dist * 0.1)
+
+        sphere = vtk.vtkSphereSource()
+        sphere.SetCenter(*center)
+        sphere.SetRadius(radius)
+        sphere.SetPhiResolution(32)
+        sphere.SetThetaResolution(32)
+        sphere.Update()
+
+        model = self._ensureSphereModel()
+        model.SetAndObservePolyData(sphere.GetOutput())
+        return center, radius
+
 
     def process(self, inputMarkups, *args, **kwargs) -> bool:
         """
