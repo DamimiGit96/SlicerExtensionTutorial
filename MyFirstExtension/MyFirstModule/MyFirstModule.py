@@ -15,6 +15,8 @@ from slicer.parameterNodeWrapper import (
 )
 
 from slicer import vtkMRMLScalarVolumeNode
+from slicer import vtkMRMLMarkupsFiducialNode
+
 
 
 #
@@ -29,7 +31,7 @@ class MyFirstModule(ScriptedLoadableModule):
 
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
-        self.parent.title = _("MyFirstModule")  # TODO: make this more human readable by adding spaces
+        self.parent.title = _("Center of Mass")
         # TODO: set categories (folders where the module shows up in the module selector)
         self.parent.categories = [translate("qSlicerAbstractCoreModule", "Examples")]
         self.parent.dependencies = []  # TODO: add here list of module names that this module requires
@@ -117,7 +119,7 @@ class MyFirstModuleParameterNode:
     invertedVolume - The output volume that will contain the inverted thresholded volume.
     """
 
-    inputVolume: vtkMRMLScalarVolumeNode
+    inputVolume: vtkMRMLMarkupsFiducialNode
     imageThreshold: Annotated[float, WithinRange(-100, 500)] = 100
     invertThreshold: bool = False
     thresholdedVolume: vtkMRMLScalarVolumeNode
@@ -141,6 +143,8 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.logic = None
         self._parameterNode = None
         self._parameterNodeGuiTag = None
+        self.observedMarkupNode = None
+        self._markupsObserverTag = None
 
     def setup(self) -> None:
         """Called when the user opens the module the first time and the widget is initialized."""
@@ -169,9 +173,12 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         # Buttons
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+        self.ui.autoUpdateCheckBox.connect("toggled(bool)", self.onEnableAutoUpdate)
+
 
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
+
 
     def cleanup(self) -> None:
         """Called when the application closes and the module widget is destroyed."""
@@ -208,11 +215,15 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.setParameterNode(self.logic.getParameterNode())
 
-        # Select default input nodes if nothing is selected yet to save a few clicks for the user
+        # Select default input point list if nothing is selected yet
         if not self._parameterNode.inputVolume:
-            firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
-            if firstVolumeNode:
-                self._parameterNode.inputVolume = firstVolumeNode
+            firstMarkups = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLMarkupsFiducialNode")
+            if firstMarkups:
+                self._parameterNode.inputVolume = firstMarkups
+            else:
+                # Crear una lista vacía por conveniencia
+                created = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "F")
+                self._parameterNode.inputVolume = created
 
     def setParameterNode(self, inputParameterNode: MyFirstModuleParameterNode | None) -> None:
         """
@@ -232,25 +243,36 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self._checkCanApply()
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        if self._parameterNode and self._parameterNode.inputVolume and self._parameterNode.thresholdedVolume:
-            self.ui.applyButton.toolTip = _("Compute output volume")
+        if self._parameterNode and self._parameterNode.inputVolume:
+            self.ui.applyButton.toolTip = _("Compute center of mass")
             self.ui.applyButton.enabled = True
         else:
-            self.ui.applyButton.toolTip = _("Select input and output volume nodes")
+            self.ui.applyButton.toolTip = _("Select input point list")
             self.ui.applyButton.enabled = False
+
 
     def onApplyButton(self) -> None:
         """Run processing when user clicks "Apply" button."""
         with slicer.util.tryWithErrorDisplay(_("Failed to compute results."), waitCursor=True):
-            # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(),
-                               self.ui.imageThresholdSliderWidget.value, self.ui.invertOutputCheckBox.checked)
+            # Ejecuta la lógica con la lista de puntos seleccionada
+            self.logic.process(self.ui.inputSelector.currentNode())
+            # Muestra el resultado formateado
+            self.ui.centerOfMassValueLabel.text = ", ".join(f"{v:.2f}" for v in self.logic.centerOfMass)
 
-            # Compute inverted output (if needed)
-            if self.ui.invertedOutputSelector.currentNode():
-                # If additional output volume is selected then result with inverted threshold is written there
-                self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
-                                   self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
+    def onEnableAutoUpdate(self, autoUpdate):
+        if self._markupsObserverTag:
+            self.observedMarkupNode.RemoveObserver(self._markupsObserverTag)
+            self.observedMarkupNode = None
+            self._markupsObserverTag = None
+        if autoUpdate and self.ui.inputSelector.currentNode():
+            self.observedMarkupNode = self.ui.inputSelector.currentNode()
+            self._markupsObserverTag = self.observedMarkupNode.AddObserver(
+                slicer.vtkMRMLMarkupsNode.PointModifiedEvent, self.onMarkupsUpdated)
+
+    def onMarkupsUpdated(self, caller=None, event=None):
+        self.onApplyButton()
+
+
 
 
 #
@@ -275,43 +297,27 @@ class MyFirstModuleLogic(ScriptedLoadableModuleLogic):
     def getParameterNode(self):
         return MyFirstModuleParameterNode(super().getParameterNode())
 
-    def process(self,
-                inputVolume: vtkMRMLScalarVolumeNode,
-                outputVolume: vtkMRMLScalarVolumeNode,
-                imageThreshold: float,
-                invert: bool = False,
-                showResult: bool = True) -> None:
+    def getCenterOfMass(self, markupsNode):
+        import numpy as np
+        n = markupsNode.GetNumberOfControlPoints()
+        if n == 0:
+            return np.array([0.0, 0.0, 0.0])
+        s = np.zeros(3)
+        for i in range(n):
+            pos = markupsNode.GetNthControlPointPosition(i)
+            s += pos
+        center = s / n
+        logging.info(f'Center of mass for {markupsNode.GetName()}: {center}')
+        return center
+
+    def process(self, inputMarkups, *args, **kwargs) -> bool:
         """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param outputVolume: thresholding result
-        :param imageThreshold: values above/below this threshold will be set to 0
-        :param invert: if True then values above the threshold will be set to 0, otherwise values below are set to 0
-        :param showResult: show output volume in slice viewers
+        Compute center of mass of input markup points
         """
-
-        if not inputVolume or not outputVolume:
-            raise ValueError("Input or output volume is invalid")
-
-        import time
-
-        startTime = time.time()
-        logging.info("Processing started")
-
-        # Compute the thresholded output volume using the "Threshold Scalar Volume" CLI module
-        cliParams = {
-            "InputVolume": inputVolume.GetID(),
-            "OutputVolume": outputVolume.GetID(),
-            "ThresholdValue": imageThreshold,
-            "ThresholdType": "Above" if invert else "Below",
-        }
-        cliNode = slicer.cli.run(slicer.modules.thresholdscalarvolume, None, cliParams, wait_for_completion=True, update_display=showResult)
-        # We don't need the CLI module node anymore, remove it to not clutter the scene with it
-        slicer.mrmlScene.RemoveNode(cliNode)
-
-        stopTime = time.time()
-        logging.info(f"Processing completed in {stopTime-startTime:.2f} seconds")
+        if not inputMarkups:
+            raise ValueError("Input markups node is invalid")
+        self.centerOfMass = self.getCenterOfMass(inputMarkups)
+        return True
 
 
 #
