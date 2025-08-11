@@ -148,6 +148,11 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.observedMarkupNode = None
         self._markupsObserverTag = None
 
+    def onInputSelectorChanged(self, node) -> None:
+        if self._parameterNode:
+            self._parameterNode.inputVolume = node
+        self._checkCanApply()
+
     def setup(self) -> None:
         """Called when the user opens the module the first time and the widget is initialized."""
         ScriptedLoadableModuleWidget.setup(self)
@@ -177,6 +182,8 @@ class MyFirstModuleWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
         self.ui.autoUpdateCheckBox.connect("toggled(bool)", self.onEnableAutoUpdate)
         self.ui.createSphereButton.connect("clicked()", self.onCreateSphereButton)
+        self.ui.inputSelector.connect("currentNodeChanged(vtkMRMLNode*)", self.onInputSelectorChanged)
+
 
 
         # Make sure parameter node is initialized (needed for module reload)
