@@ -376,64 +376,40 @@ class MyFirstModuleLogic(ScriptedLoadableModuleLogic):
 
 
 class MyFirstModuleTest(ScriptedLoadableModuleTest):
-    """
-    This is the test case for your scripted module.
-    Uses ScriptedLoadableModuleTest base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
+    """Tests for the Center of Mass module using Markups."""
 
     def setUp(self):
-        """Do whatever is needed to reset the state - typically a scene clear will be enough."""
         slicer.mrmlScene.Clear()
 
     def runTest(self):
-        """Run as few or as many tests as needed here."""
         self.setUp()
-        self.test_MyFirstModule1()
+        self.test_centerOfMass()
+        self.test_sphereBetweenFirstTwoPoints()
 
-    def test_MyFirstModule1(self):
-        """Ideally you should have several levels of tests.  At the lowest level
-        tests should exercise the functionality of the logic with different inputs
-        (both valid and invalid).  At higher levels your tests should emulate the
-        way the user would interact with your code and confirm that it still works
-        the way you intended.
-        One of the most important features of the tests is that it should alert other
-        developers when their changes will have an impact on the behavior of your
-        module.  For example, if a developer removes a feature that you depend on,
-        your test should break so they know that the feature is needed.
-        """
-
-        self.delayDisplay("Starting the test")
-
-        # Get/create input data
-
-        import SampleData
-
-        registerSampleData()
-        inputVolume = SampleData.downloadSample("MyFirstModule1")
-        self.delayDisplay("Loaded test data set")
-
-        inputScalarRange = inputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(inputScalarRange[0], 0)
-        self.assertEqual(inputScalarRange[1], 695)
-
-        outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
-        threshold = 100
-
-        # Test the module logic
+    def test_centerOfMass(self):
+        slicer.mrmlScene.Clear()
+        f = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "TestPoints")
+        f.AddControlPoint([0, 0, 0])
+        f.AddControlPoint([2, 0, 0])
+        f.AddControlPoint([0, 2, 0])
 
         logic = MyFirstModuleLogic()
+        logic.process(f)
+        cx, cy, cz = logic.centerOfMass
+        self.assertAlmostEqual(cx, 2/3, places=5)
+        self.assertAlmostEqual(cy, 2/3, places=5)
+        self.assertAlmostEqual(cz, 0.0, places=5)
 
-        # Test algorithm with non-inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, True)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], threshold)
+    def test_sphereBetweenFirstTwoPoints(self):
+        slicer.mrmlScene.Clear()
+        f = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsFiducialNode", "P")
+        f.AddControlPoint([0, 0, 0])
+        f.AddControlPoint([10, 0, 0])
 
-        # Test algorithm with inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, False)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], inputScalarRange[1])
+        logic = MyFirstModuleLogic()
+        center, radius = logic.positionSphereBetweenFirstTwoPoints(f, radius=None)
+        self.assertAlmostEqual(center[0], 5.0, places=5)
+        self.assertAlmostEqual(center[1], 0.0, places=5)
+        self.assertAlmostEqual(center[2], 0.0, places=5)
+        self.assertGreater(radius, 0.0)
 
-        self.delayDisplay("Test passed")
